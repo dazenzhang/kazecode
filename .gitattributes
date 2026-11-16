@@ -1,0 +1,11 @@
+# 统一以 LF 存入库内，避免 Windows 上 CRLF 造成的全文件 diff 噪音，
+# 同时保证任何机器 clone 出来的内容完全一致。
+* text=auto eol=lf
+
+*.py    text diff=python
+*.md    text diff=markdown
+*.yaml  text
+*.yml   text
+*.tcss  text
+*.toml  text
+*.lock  text -diff
