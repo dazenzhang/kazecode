@@ -562,3 +562,189 @@ class TestAgentHookIntegration:
         rejected = tool_results[0]
         assert rejected.is_error is True
         assert "Hook rejected" in rejected.output
+
+    @pytest.mark.asyncio
+    async def test_pre_tool_use_reject_prevents_tool_execution(self, tmp_path):
+        """被 reject 的工具不能真的执行 —— 用文件副作用来证明。"""
+        from mewcode.agent import Agent, ToolResultEvent
+        from mewcode.client import LLMClient
+        from mewcode.conversation import ConversationManager
+        from mewcode.tools import create_default_registry
+        from mewcode.tools.base import StreamEnd, TextDelta, ToolCallComplete
+
+        target = tmp_path / "should-not-exist.txt"
+
+        class MockClient(LLMClient):
+            def __init__(self):
+                self._call = 0
+
+            async def stream(self, conversation, system="", tools=None):
+                self._call += 1
+                if self._call == 1:
+                    yield ToolCallComplete(
+                        tool_id="t1",
+                        tool_name="WriteFile",
+                        arguments={"file_path": str(target), "content": "boom"},
+                    )
+                    yield StreamEnd(stop_reason="tool_use", input_tokens=10, output_tokens=5)
+                else:
+                    yield TextDelta(text="ok")
+                    yield StreamEnd(stop_reason="end_turn", input_tokens=10, output_tokens=5)
+
+        hook = Hook(
+            id="block-write",
+            event="pre_tool_use",
+            action=Action(type="command", command="echo write blocked"),
+            condition=parse_condition('tool == "WriteFile"'),
+            reject=True,
+        )
+        engine = HookEngine([hook])
+
+        agent = Agent(
+            client=MockClient(),
+            registry=create_default_registry(),
+            protocol="anthropic",
+            hook_engine=engine,
+        )
+
+        conv = ConversationManager()
+        conv.add_user_message("write it")
+
+        events = []
+        async for event in agent.run(conv):
+            events.append(event)
+
+        tool_results = [e for e in events if isinstance(e, ToolResultEvent)]
+        assert len(tool_results) >= 1
+        assert tool_results[0].is_error is True
+        assert "Hook rejected" in tool_results[0].output
+        assert not target.exists(), "hook 拒绝后工具不应被执行"
+
+    @pytest.mark.asyncio
+    async def test_pre_tool_use_reject_blocks_deferred_tool(self):
+        """需要交互式权限确认的工具走延迟执行路径，同样必须被 hook 拦截。"""
+        from mewcode.agent import (
+            Agent,
+            PermissionRequest,
+            PermissionResponse,
+            ToolResultEvent,
+        )
+        from mewcode.client import LLMClient
+        from mewcode.conversation import ConversationManager
+        from mewcode.permissions.checker import Decision
+        from mewcode.permissions.modes import PermissionMode
+        from mewcode.tools import create_default_registry
+        from mewcode.tools.base import StreamEnd, TextDelta, ToolCallComplete
+
+        class MockClient(LLMClient):
+            def __init__(self):
+                self._call = 0
+
+            async def stream(self, conversation, system="", tools=None):
+                self._call += 1
+                if self._call == 1:
+                    yield ToolCallComplete(
+                        tool_id="t1",
+                        tool_name="Bash",
+                        arguments={"command": "rm -rf /"},
+                    )
+                    yield StreamEnd(stop_reason="tool_use", input_tokens=10, output_tokens=5)
+                else:
+                    yield TextDelta(text="ok")
+                    yield StreamEnd(stop_reason="end_turn", input_tokens=10, output_tokens=5)
+
+        class AskEverythingChecker:
+            """所有工具都要求交互式确认 —— 工具会被推迟到流结束后顺序执行。"""
+
+            mode = PermissionMode.DEFAULT
+
+            def check(self, tool, arguments):
+                return Decision(effect="ask", reason="needs confirmation")
+
+        hook = Hook(
+            id="block-rm",
+            event="pre_tool_use",
+            action=Action(type="command", command="echo dangerous command blocked"),
+            condition=parse_condition('tool == "Bash" && args.command =~ /rm\\s+-rf/'),
+            reject=True,
+        )
+        engine = HookEngine([hook])
+
+        agent = Agent(
+            client=MockClient(),
+            registry=create_default_registry(),
+            protocol="anthropic",
+            hook_engine=engine,
+            permission_checker=AskEverythingChecker(),
+        )
+
+        conv = ConversationManager()
+        conv.add_user_message("delete everything")
+
+        events = []
+        async for event in agent.run(conv):
+            if isinstance(event, PermissionRequest):
+                # hook 应该在权限确认之前就拦下，不该走到这一步
+                event.future.set_result(PermissionResponse.DENY)
+            events.append(event)
+
+        tool_results = [e for e in events if isinstance(e, ToolResultEvent)]
+        assert len(tool_results) >= 1
+        assert tool_results[0].is_error is True
+        assert "Hook rejected" in tool_results[0].output
+        assert not any(isinstance(e, PermissionRequest) for e in events), (
+            "hook 拒绝的工具不应再弹出权限确认"
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_tool_use_hook_runs_in_interactive_path(self):
+        """post_tool_use hook 在交互式路径上同样要触发。"""
+        from mewcode.agent import Agent, ToolResultEvent
+        from mewcode.client import LLMClient
+        from mewcode.conversation import ConversationManager
+        from mewcode.tools import create_default_registry
+        from mewcode.tools.base import StreamEnd, TextDelta, ToolCallComplete
+
+        class MockClient(LLMClient):
+            def __init__(self):
+                self._call = 0
+
+            async def stream(self, conversation, system="", tools=None):
+                self._call += 1
+                if self._call == 1:
+                    yield ToolCallComplete(
+                        tool_id="t1",
+                        tool_name="ReadFile",
+                        arguments={"file_path": "README.md"},
+                    )
+                    yield StreamEnd(stop_reason="tool_use", input_tokens=10, output_tokens=5)
+                else:
+                    yield TextDelta(text="ok")
+                    yield StreamEnd(stop_reason="end_turn", input_tokens=10, output_tokens=5)
+
+        hook = Hook(
+            id="after-read",
+            event="post_tool_use",
+            action=Action(type="command", command="echo post hook ran"),
+            condition=parse_condition('tool == "ReadFile"'),
+        )
+        engine = HookEngine([hook])
+
+        agent = Agent(
+            client=MockClient(),
+            registry=create_default_registry(),
+            protocol="anthropic",
+            hook_engine=engine,
+        )
+
+        conv = ConversationManager()
+        conv.add_user_message("read it")
+
+        events = []
+        async for event in agent.run(conv):
+            events.append(event)
+
+        tool_results = [e for e in events if isinstance(e, ToolResultEvent)]
+        assert len(tool_results) >= 1
+        assert hook.executed is True, "post_tool_use hook 未被执行"
+

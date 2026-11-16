@@ -424,6 +424,42 @@ class Agent:
     def _infer_file_path(self, args: dict) -> str:
         return str(args.get("file_path", args.get("path", "")))
 
+    async def _run_pre_tool_use_hook(self, tc: ToolCallComplete) -> ToolResult | None:
+        """执行 pre_tool_use hook；被 reject 时返回错误结果，否则返回 None。
+
+        三条工具执行路径（流式直执行、延迟交互、非交互 -p）都必须经过这里，
+        否则 reject=True 的 hook 在其中一条路上形同虚设。
+        """
+        if not self.hook_engine:
+            return None
+
+        hook_ctx = self._build_hook_context(
+            "pre_tool_use",
+            tool_name=tc.tool_name,
+            tool_args=tc.arguments,
+            file_path=self._infer_file_path(tc.arguments),
+        )
+        rejection = await self.hook_engine.run_pre_tool_hooks(hook_ctx)
+        if rejection is None:
+            return None
+        return ToolResult(
+            output=f"Hook rejected: {rejection.reason}",
+            is_error=True,
+        )
+
+    async def _run_post_tool_use_hook(self, tc: ToolCallComplete) -> None:
+        """执行 post_tool_use hook。"""
+        if not self.hook_engine:
+            return
+
+        hook_ctx = self._build_hook_context(
+            "post_tool_use",
+            tool_name=tc.tool_name,
+            tool_args=tc.arguments,
+            file_path=self._infer_file_path(tc.arguments),
+        )
+        await self.hook_engine.run_hooks("post_tool_use", hook_ctx)
+
     def _drain_hook_events(self) -> list[HookEvent]:
         if not self.hook_engine:
             return []
@@ -680,6 +716,10 @@ class Agent:
             tool_results: list[ToolResultBlock] = []
             streaming_results = await executor.collect_results()
 
+            # 工具 hook 的执行结果及时回显给用户，而不是攒到 turn_end
+            for he in self._drain_hook_events():
+                yield he
+
             for br in streaming_results:
                 if br.is_unknown:
                     consecutive_unknown += 1
@@ -738,6 +778,10 @@ class Agent:
                     is_error=result.is_error,
                     elapsed=elapsed,
                 )
+
+            # 延迟执行的工具同样会触发 hook，这里回显其执行结果
+            for he in self._drain_hook_events():
+                yield he
 
             if consecutive_unknown >= 3:
                 yield ErrorEvent(
@@ -819,6 +863,18 @@ class Agent:
                 is_unknown=False,
             )
 
+        # pre_tool_use hook 拦截：必须在权限检查之前，reject 的工具不应该
+        # 再去打扰用户确认权限。
+        rejection = await self._run_pre_tool_use_hook(tc)
+        if rejection is not None:
+            return _ToolExecResult(
+                tool_id=tc.tool_id,
+                tool_name=tc.tool_name,
+                result=rejection,
+                elapsed=time.monotonic() - start,
+                is_unknown=False,
+            )
+
         if self.permission_checker:
             decision = self.permission_checker.check(tool, tc.arguments)
             if decision.effect == "deny":
@@ -837,6 +893,8 @@ class Agent:
             result = ToolResult(output=f"Parameter validation error: {e}", is_error=True)
         except Exception as e:
             result = ToolResult(output=f"Tool execution error: {e}", is_error=True)
+
+        await self._run_post_tool_use_hook(tc)
 
         self._snapshot_for_recovery(tc, result)
 
@@ -878,6 +936,14 @@ class Agent:
             )
             elapsed = time.monotonic() - start
             yield result, elapsed, is_unknown
+            return
+
+        # pre_tool_use hook 拦截：必须在权限检查之前，reject 的工具不应该
+        # 再去打扰用户确认权限。
+        rejection = await self._run_pre_tool_use_hook(tc)
+        if rejection is not None:
+            elapsed = time.monotonic() - start
+            yield rejection, elapsed, is_unknown
             return
 
         # 权限检查
@@ -935,6 +1001,8 @@ class Agent:
             result = ToolResult(
                 output=f"Tool execution error: {e}", is_error=True
             )
+
+        await self._run_post_tool_use_hook(tc)
 
         self._snapshot_for_recovery(tc, result)
 
@@ -1220,20 +1288,9 @@ class Agent:
                 is_error=True,
             )
 
-        if self.hook_engine:
-            file_path = self._infer_file_path(tc.arguments)
-            hook_ctx = self._build_hook_context(
-                "pre_tool_use",
-                tool_name=tc.tool_name,
-                tool_args=tc.arguments,
-                file_path=file_path,
-            )
-            rejection = await self.hook_engine.run_pre_tool_hooks(hook_ctx)
-            if rejection is not None:
-                return ToolResult(
-                    output=f"Hook rejected: {rejection.reason}",
-                    is_error=True,
-                )
+        rejection = await self._run_pre_tool_use_hook(tc)
+        if rejection is not None:
+            return rejection
 
         if self.permission_checker:
             decision = self.permission_checker.check(tool, tc.arguments)
@@ -1263,15 +1320,7 @@ class Agent:
                 output=f"Tool execution error: {e}", is_error=True
             )
 
-        if self.hook_engine:
-            file_path = self._infer_file_path(tc.arguments)
-            hook_ctx = self._build_hook_context(
-                "post_tool_use",
-                tool_name=tc.tool_name,
-                tool_args=tc.arguments,
-                file_path=file_path,
-            )
-            await self.hook_engine.run_hooks("post_tool_use", hook_ctx)
+        await self._run_post_tool_use_hook(tc)
 
         return result
 
