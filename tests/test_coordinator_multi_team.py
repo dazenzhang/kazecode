@@ -11,12 +11,12 @@ import asyncio
 import shutil
 from unittest.mock import MagicMock
 
-from mewcode.teams.manager import TeamManager
-from mewcode.teams.models import resolve_team_dir
-from mewcode.tools.team_create import TeamCreateTool, TeamCreateParams
-from mewcode.tools.team_delete import TeamDeleteTool, TeamDeleteParams
-from mewcode.tools import ToolRegistry
-from mewcode.tools.base import Tool, ToolResult
+from kazecode.teams.manager import TeamManager
+from kazecode.teams.models import resolve_team_dir
+from kazecode.tools.team_create import TeamCreateTool, TeamCreateParams
+from kazecode.tools.team_delete import TeamDeleteTool, TeamDeleteParams
+from kazecode.tools import ToolRegistry
+from kazecode.tools.base import Tool, ToolResult
 
 
 class DummyTool(Tool):

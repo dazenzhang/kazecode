@@ -1,4 +1,4 @@
-# MewCode
+# Kazecode
 
 一个终端里的 AI 编程助手 —— 用自然语言驱动它在你的代码库中读、写、改、跑。
 
@@ -6,7 +6,7 @@
 支持 MCP 外部工具、生命周期 Hooks、Skills、子代理与多 Agent 协作。
 
 ```
-┌─ mewcode ─────────────────────────────────────────────────┐
+┌─ kazecode ─────────────────────────────────────────────────┐
 │ > 帮我看看 user 模块的鉴权逻辑有没有漏洞                    │
 │                                                          │
 │  ⏺ ReadFile(app/api/user.py)                             │
@@ -30,7 +30,7 @@
 | **多 Agent 协作** | Team 模式：Lead 负责调度，成员并行执行子任务 |
 | **上下文管理** | 分层压缩 + 自动压缩、token 计数、文件历史与回退（rewind） |
 | **远程模式** | WebSocket 服务 + 浏览器 UI，可在手机等设备上驱动同一个会话 |
-| **会话持久化** | 会话与记忆落盘到 `.mewcode/`，可恢复、可续接 |
+| **会话持久化** | 会话与记忆落盘到 `.kazecode/`，可恢复、可续接 |
 
 ## 快速开始
 
@@ -43,23 +43,23 @@ uv sync                      # 推荐（使用项目内的 uv.lock）
 pip install -e .
 
 # 初始化配置
-mkdir -p .mewcode
-cp .mewcode/config.yaml.example .mewcode/config.yaml
+mkdir -p .kazecode
+cp .kazecode/config.yaml.example .kazecode/config.yaml
 # 编辑 config.yaml 填入你的 API Key
 
 # 运行
-mewcode                      # 交互式 TUI
-mewcode -p "统计各模块的代码行数"   # 非交互模式，直接输出结果
-mewcode --remote             # 远程模式，浏览器访问 http://localhost:18888
+kazecode                      # 交互式 TUI
+kazecode -p "统计各模块的代码行数"   # 非交互模式，直接输出结果
+kazecode --remote             # 远程模式，浏览器访问 http://localhost:18888
 ```
 
 ### 配置
 
 配置文件按以下顺序加载，后者覆盖前者：
 
-1. `~/.mewcode/config.yaml` —— 用户级
-2. `.mewcode/config.yaml` —— 项目级
-3. `.mewcode/config.local.yaml` —— 项目级本地覆盖（不入库）
+1. `~/.kazecode/config.yaml` —— 用户级
+2. `.kazecode/config.yaml` —— 项目级
+3. `.kazecode/config.local.yaml` —— 项目级本地覆盖（不入库）
 
 ```yaml
 providers:
@@ -119,7 +119,7 @@ Hooks 写在 `config.yaml` 的 `hooks:` 段，用于在生命周期节点拦截�
 ## 目录约定
 
 ```
-.mewcode/
+.kazecode/
 ├── config.yaml          # 配置（不入库）
 ├── config.local.yaml    # 本地覆盖（不入库）
 ├── agents/              # 项目级子代理定义
@@ -129,12 +129,12 @@ Hooks 写在 `config.yaml` 的 `hooks:` 段，用于在生命周期节点拦截�
 └── file-history/        # 文件修改历史（支持 rewind）
 ```
 
-用户级目录 `~/.mewcode/` 下同样支持 `agents/` 与 `skills/`。
+用户级目录 `~/.kazecode/` 下同样支持 `agents/` 与 `skills/`。
 
 ## 项目结构
 
 ```
-mewcode/
+kazecode/
 ├── agent.py        # 核心 Agent 循环：工具调度、并行执行、错误恢复
 ├── app.py          # Textual TUI 应用
 ├── client.py       # Anthropic / OpenAI 协议客户端与流式解析
